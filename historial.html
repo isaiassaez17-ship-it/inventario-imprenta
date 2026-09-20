@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Historial — Inventario Imprenta</title>
+  <link rel="stylesheet" href="css/styles.css" />
+</head>
+<body>
+  <header class="topbar" id="topbar"></header>
+
+  <main>
+    <div class="section">
+      <h2 id="page-title">Historial</h2>
+      <p class="subtitle" id="page-subtitle"></p>
+
+      <div class="toolbar" id="admin-toolbar" style="display:none;">
+        <label class="field-label" style="margin:0;">Mes:</label>
+        <input type="month" id="month-filter" />
+        <button id="export-csv" class="btn-secondary">Exportar CSV</button>
+      </div>
+
+      <div class="card" id="summary-card" style="display:none; margin-bottom:20px;">
+        <h2 style="margin-bottom:12px;">Resumen por persona</h2>
+        <div id="summary-table"></div>
+      </div>
+
+      <div class="card">
+        <div id="requests-table"></div>
+      </div>
+    </div>
+  </main>
+
+  <script type="module">
+    import { requireLogin, isAdmin } from "./js/auth-guard.js";
+    import { db, collection, getDocs, query, where } from "./js/firebase.js";
+
+    const pageTitle = document.getElementById("page-title");
+    const pageSubtitle = document.getElementById("page-subtitle");
+    const adminToolbar = document.getElementById("admin-toolbar");
+    const monthFilter = document.getElementById("month-filter");
+    const requestsTableEl = document.getElementById("requests-table");
+    const summaryCard = document.getElementById("summary-card");
+    const summaryTableEl = document.getElementById("summary-table");
+    const exportBtn = document.getElementById("export-csv");
+
+    function currentMonthKey() {
+      const now = new Date();
+      return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+    }
+
+    function itemsToText(r) {
+      const parts = (r.items || []).map((i) => `${i.material} (${i.quantity})`);
+      if (r.otherText) parts.push(`Otro: ${r.otherText}`);
+      return parts.join(", ") || "—";
+    }
+
+    function renderRequestsTable(requests) {
+      if (requests.length === 0) {
+        requestsTableEl.innerHTML = `<div class="empty-state">No hay solicitudes para mostrar.</div>`;
+        return;
+      }
+      requestsTableEl.innerHTML = `
+        <table>
+          <thead>
+            <tr><th>Fecha</th><th>Nombre</th><th>Correo</th><th>Materiales</th><th>Notas</th></tr>
+          </thead>
+          <tbody>
+            ${requests
+              .map(
+                (r) => `
+              <tr>
+                <td>${new Date(r.createdAtMs).toLocaleString("es-CL")}</td>
+                <td>${r.userName || "—"}</td>
+                <td>${r.userEmail}</td>
+                <td>${itemsToText(r)}</td>
+                <td>${r.notes || "—"}</td>
+              </tr>
+            `
+              )
+              .join("")}
+          </tbody>
+        </table>
+      `;
+    }
+
+    function renderSummary(requests) {
+      const byPerson = {};
+      requests.forEach((r) => {
+        const key = r.userEmail;
+        if (!byPerson[key]) {
+          byPerson[key] = { name: r.userName, email: r.userEmail, requestCount: 0, itemCount: 0 };
+        }
+        byPerson[key].requestCount += 1;
+        byPerson[key].itemCount += (r.items || []).reduce((sum, i) => sum + i.quantity, 0);
+      });
+
+      const rows = Object.values(byPerson).sort((a, b) => b.itemCount - a.itemCount);
+
+      if (rows.length === 0) {
+        summaryTableEl.innerHTML = `<div class="empty-state">Sin datos para este mes.</div>`;
+        return;
+      }
+
+      summaryTableEl.innerHTML = `
+        <table>
+          <thead>
+            <tr><th>Nombre</th><th>Correo</th><th>N° solicitudes</th><th>Total unidades</th></tr>
+          </thead>
+          <tbody>
+            ${rows
+              .map(
+                (p) => `
+              <tr>
+                <td>${p.name || "—"}</td>
+                <td>${p.email}</td>
+                <td>${p.requestCount}</td>
+                <td>${p.itemCount}</td>
+              </tr>
+            `
+              )
+              .join("")}
+          </tbody>
+        </table>
+      `;
+    }
+
+    function downloadCsv(requests, monthKey) {
+      const header = ["Fecha", "Nombre", "Correo", "Materiales", "Notas"];
+      const rows = requests.map((r) => [
+        new Date(r.createdAtMs).toLocaleString("es-CL"),
+        r.userName || "",
+        r.userEmail,
+        itemsToText(r).replace(/,/g, ";"),
+        (r.notes || "").replace(/,/g, ";"),
+      ]);
+
+      const csv = [header, ...rows].map((row) => row.map((c) => `"${c}"`).join(",")).join("\n");
+      const blob = new Blob(["﻿" + csv], { type: "text/csv;charset=utf-8;" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `catastro-${monthKey}.csv`;
+      a.click();
+      URL.revokeObjectURL(url);
+    }
+
+    let lastLoadedRequests = [];
+    let lastMonthKey = currentMonthKey();
+
+    async function loadAdminView(monthKey) {
+      const q = query(collection(db, "requests"), where("monthKey", "==", monthKey));
+      const snap = await getDocs(q);
+      const requests = snap.docs.map((d) => d.data()).sort((a, b) => b.createdAtMs - a.createdAtMs);
+      lastLoadedRequests = requests;
+      lastMonthKey = monthKey;
+      renderSummary(requests);
+      renderRequestsTable(requests);
+    }
+
+    async function loadMyView(user) {
+      const q = query(collection(db, "requests"), where("uid", "==", user.uid));
+      const snap = await getDocs(q);
+      const requests = snap.docs.map((d) => d.data()).sort((a, b) => b.createdAtMs - a.createdAtMs);
+      renderRequestsTable(requests);
+    }
+
+    requireLogin(async (user) => {
+      if (isAdmin(user.email)) {
+        pageTitle.textContent = "Catastro mensual";
+        pageSubtitle.textContent = "Todas las solicitudes recibidas, agrupadas por persona.";
+        adminToolbar.style.display = "flex";
+        summaryCard.style.display = "block";
+
+        monthFilter.value = currentMonthKey();
+        await loadAdminView(monthFilter.value);
+
+        monthFilter.addEventListener("change", () => loadAdminView(monthFilter.value));
+        exportBtn.addEventListener("click", () => downloadCsv(lastLoadedRequests, lastMonthKey));
+      } else {
+        pageTitle.textContent = "Mis solicitudes";
+        pageSubtitle.textContent = "Historial completo de lo que has pedido.";
+        await loadMyView(user);
+      }
+    });
+  </script>
+</body>
+</html>

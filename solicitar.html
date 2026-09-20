@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Solicitar materiales — Inventario Imprenta</title>
+  <link rel="stylesheet" href="css/styles.css" />
+</head>
+<body>
+  <header class="topbar" id="topbar"></header>
+
+  <main>
+    <div class="section">
+      <h2>Solicitar materiales</h2>
+      <p class="subtitle">Indica la cantidad de cada material que necesitas y envía tu solicitud.</p>
+
+      <div id="alert-box"></div>
+
+      <form id="request-form" class="card">
+        <div id="materials-grid" class="materials-grid"></div>
+
+        <div style="margin-bottom:16px;">
+          <label class="field-label" for="otro-texto">Otro material (no está en la lista)</label>
+          <input type="text" id="otro-texto" placeholder="Ej: Papel adhesivo A4, 20 unidades" />
+        </div>
+
+        <div style="margin-bottom:20px;">
+          <label class="field-label" for="notas">Notas adicionales (opcional)</label>
+          <textarea id="notas" rows="3" placeholder="Ej: Es urgente, lo necesito antes del viernes"></textarea>
+        </div>
+
+        <button type="submit" class="btn-primary" id="submit-btn">Enviar solicitud</button>
+      </form>
+    </div>
+
+    <div class="section">
+      <h2>Mis últimas solicitudes</h2>
+      <div class="card">
+        <div id="my-requests"></div>
+      </div>
+    </div>
+  </main>
+
+  <script type="module">
+    import { requireLogin } from "./js/auth-guard.js";
+    import { MATERIALS } from "./js/materials.js";
+    import {
+      db,
+      collection,
+      addDoc,
+      doc,
+      setDoc,
+      getDocs,
+      query,
+      where,
+      serverTimestamp,
+      increment,
+    } from "./js/firebase.js";
+    import { sendRequestNotification } from "./js/notify.js";
+
+    const alertBox = document.getElementById("alert-box");
+    const grid = document.getElementById("materials-grid");
+    const form = document.getElementById("request-form");
+    const submitBtn = document.getElementById("submit-btn");
+    const myRequestsEl = document.getElementById("my-requests");
+
+    MATERIALS.forEach((material) => {
+      const row = document.createElement("div");
+      row.className = "material-row";
+      row.innerHTML = `
+        <label for="mat-${material}">${material}</label>
+        <input type="number" id="mat-${material}" min="0" value="0" data-material="${material}" />
+      `;
+      grid.appendChild(row);
+    });
+
+    function showAlert(type, msg) {
+      alertBox.innerHTML = `<div class="alert alert-${type}">${msg}</div>`;
+    }
+
+    function monthKeyFor(date) {
+      const y = date.getFullYear();
+      const m = String(date.getMonth() + 1).padStart(2, "0");
+      return `${y}-${m}`;
+    }
+
+    async function loadMyRequests(user) {
+      const q = query(collection(db, "requests"), where("uid", "==", user.uid));
+      const snap = await getDocs(q);
+      const items = snap.docs
+        .map((d) => d.data())
+        .sort((a, b) => (b.createdAtMs || 0) - (a.createdAtMs || 0))
+        .slice(0, 5);
+
+      if (items.length === 0) {
+        myRequestsEl.innerHTML = `<div class="empty-state">Aún no tienes solicitudes.</div>`;
+        return;
+      }
+
+      myRequestsEl.innerHTML = `
+        <table>
+          <thead>
+            <tr><th>Fecha</th><th>Materiales</th><th>Notas</th></tr>
+          </thead>
+          <tbody>
+            ${items
+              .map(
+                (r) => `
+              <tr>
+                <td>${new Date(r.createdAtMs).toLocaleString("es-CL")}</td>
+                <td>${(r.items || []).map((i) => `${i.material} (${i.quantity})`).join(", ")}${
+                  r.otherText ? `, Otro: ${r.otherText}` : ""
+                }</td>
+                <td>${r.notes || "—"}</td>
+              </tr>
+            `
+              )
+              .join("")}
+          </tbody>
+        </table>
+      `;
+    }
+
+    requireLogin(async (user) => {
+      await loadMyRequests(user);
+
+      form.addEventListener("submit", async (e) => {
+        e.preventDefault();
+        alertBox.innerHTML = "";
+
+        const items = MATERIALS.map((material) => {
+          const input = document.getElementById(`mat-${material}`);
+          return { material, quantity: parseInt(input.value, 10) || 0 };
+        }).filter((i) => i.quantity > 0);
+
+        const otherText = document.getElementById("otro-texto").value.trim();
+        const notes = document.getElementById("notas").value.trim();
+
+        if (items.length === 0 && !otherText) {
+          showAlert("error", "Selecciona al menos un material o describe uno en \"Otro material\".");
+          return;
+        }
+
+        submitBtn.disabled = true;
+        submitBtn.textContent = "Enviando...";
+
+        try {
+          const now = new Date();
+
+          await addDoc(collection(db, "requests"), {
+            uid: user.uid,
+            userName: user.displayName || "",
+            userEmail: user.email,
+            items,
+            otherText,
+            notes,
+            monthKey: monthKeyFor(now),
+            createdAtMs: now.getTime(),
+            createdAt: serverTimestamp(),
+          });
+
+          await setDoc(
+            doc(db, "users", user.uid),
+            {
+              name: user.displayName || "",
+              email: user.email,
+              lastRequestAt: serverTimestamp(),
+              requestCount: increment(1),
+            },
+            { merge: true }
+          );
+
+          await sendRequestNotification({
+            userName: user.displayName || user.email,
+            userEmail: user.email,
+            items,
+            otherText,
+            notes,
+            date: now.toLocaleString("es-CL"),
+          });
+
+          showAlert("success", "Solicitud enviada correctamente. La imprenta fue notificada.");
+          form.reset();
+          MATERIALS.forEach((m) => (document.getElementById(`mat-${m}`).value = 0));
+          await loadMyRequests(user);
+        } catch (err) {
+          console.error(err);
+          showAlert("error", "Ocurrió un error al enviar tu solicitud. Intenta nuevamente.");
+        } finally {
+          submitBtn.disabled = false;
+          submitBtn.textContent = "Enviar solicitud";
+        }
+      });
+    });
+  </script>
+</body>
+</html>

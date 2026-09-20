@@ -1,0 +1,39 @@
+rules_version = '2';
+
+// Pega este contenido en Firebase Console > Firestore Database > Reglas.
+// Recuerda reemplazar el dominio y el correo de administrador si los cambias
+// en js/config.js — deben coincidir aquí también.
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isInstitution() {
+      return isSignedIn() &&
+        request.auth.token.email.matches('.*@tabancura[.]cl$');
+    }
+
+    function isAdmin() {
+      return isSignedIn() &&
+        request.auth.token.email in ['imprenta@tabancura.cl'];
+    }
+
+    match /users/{userId} {
+      allow read: if isSignedIn() && (request.auth.uid == userId || isAdmin());
+      allow write: if isSignedIn() && request.auth.uid == userId && isInstitution();
+    }
+
+    match /requests/{requestId} {
+      allow create: if isInstitution() &&
+        request.resource.data.uid == request.auth.uid &&
+        request.resource.data.userEmail == request.auth.token.email;
+
+      allow read, list: if isSignedIn() &&
+        (resource.data.uid == request.auth.uid || isAdmin());
+
+      allow update, delete: if false;
+    }
+  }
+}
