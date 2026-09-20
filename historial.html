@@ -18,6 +18,7 @@
         <label class="field-label" style="margin:0;">Mes:</label>
         <input type="month" id="month-filter" />
         <button id="export-csv" class="btn-secondary">Exportar CSV</button>
+        <span class="badge">● En vivo</span>
       </div>
 
       <div class="card" id="summary-card" style="display:none; margin-bottom:20px;">
@@ -33,7 +34,7 @@
 
   <script type="module">
     import { requireLogin, isAdmin } from "./js/auth-guard.js";
-    import { db, collection, getDocs, query, where } from "./js/firebase.js";
+    import { db, collection, onSnapshot, query, where } from "./js/firebase.js";
 
     const pageTitle = document.getElementById("page-title");
     const pageSubtitle = document.getElementById("page-subtitle");
@@ -147,40 +148,45 @@
 
     let lastLoadedRequests = [];
     let lastMonthKey = currentMonthKey();
+    let unsubscribe = null;
 
-    async function loadAdminView(monthKey) {
-      const q = query(collection(db, "requests"), where("monthKey", "==", monthKey));
-      const snap = await getDocs(q);
-      const requests = snap.docs.map((d) => d.data()).sort((a, b) => b.createdAtMs - a.createdAtMs);
-      lastLoadedRequests = requests;
+    function watchAdminView(monthKey) {
+      if (unsubscribe) unsubscribe();
       lastMonthKey = monthKey;
-      renderSummary(requests);
-      renderRequestsTable(requests);
+
+      const q = query(collection(db, "requests"), where("monthKey", "==", monthKey));
+      unsubscribe = onSnapshot(q, (snap) => {
+        const requests = snap.docs.map((d) => d.data()).sort((a, b) => b.createdAtMs - a.createdAtMs);
+        lastLoadedRequests = requests;
+        renderSummary(requests);
+        renderRequestsTable(requests);
+      });
     }
 
-    async function loadMyView(user) {
+    function watchMyView(user) {
       const q = query(collection(db, "requests"), where("uid", "==", user.uid));
-      const snap = await getDocs(q);
-      const requests = snap.docs.map((d) => d.data()).sort((a, b) => b.createdAtMs - a.createdAtMs);
-      renderRequestsTable(requests);
+      unsubscribe = onSnapshot(q, (snap) => {
+        const requests = snap.docs.map((d) => d.data()).sort((a, b) => b.createdAtMs - a.createdAtMs);
+        renderRequestsTable(requests);
+      });
     }
 
-    requireLogin(async (user) => {
+    requireLogin((user) => {
       if (isAdmin(user.email)) {
         pageTitle.textContent = "Catastro mensual";
-        pageSubtitle.textContent = "Todas las solicitudes recibidas, agrupadas por persona.";
+        pageSubtitle.textContent = "Todas las solicitudes recibidas, agrupadas por persona. Se actualiza sola.";
         adminToolbar.style.display = "flex";
         summaryCard.style.display = "block";
 
         monthFilter.value = currentMonthKey();
-        await loadAdminView(monthFilter.value);
+        watchAdminView(monthFilter.value);
 
-        monthFilter.addEventListener("change", () => loadAdminView(monthFilter.value));
+        monthFilter.addEventListener("change", () => watchAdminView(monthFilter.value));
         exportBtn.addEventListener("click", () => downloadCsv(lastLoadedRequests, lastMonthKey));
       } else {
         pageTitle.textContent = "Mis solicitudes";
         pageSubtitle.textContent = "Historial completo de lo que has pedido.";
-        await loadMyView(user);
+        watchMyView(user);
       }
     });
   </script>

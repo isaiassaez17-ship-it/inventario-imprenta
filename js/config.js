@@ -7,12 +7,12 @@
 // Configuración del proyecto Firebase (Firebase Console > Configuración
 // del proyecto > Tus apps > Config del SDK).
 export const FIREBASE_CONFIG = {
-  apiKey: "TU_API_KEY",
-  authDomain: "TU_PROYECTO.firebaseapp.com",
-  projectId: "TU_PROYECTO",
-  storageBucket: "TU_PROYECTO.appspot.com",
-  messagingSenderId: "TU_SENDER_ID",
-  appId: "TU_APP_ID",
+  apiKey: "AIzaSyApF-l19wJFYGERG1WDjcxfRvMqui2wAoQ",
+  authDomain: "inventario-imprenta.firebaseapp.com",
+  projectId: "inventario-imprenta",
+  storageBucket: "inventario-imprenta.firebasestorage.app",
+  messagingSenderId: "65570165627",
+  appId: "1:65570165627:web:22a448c314e531c20863de",
 };
 
 // Dominio de correo institucional que se acepta para iniciar sesión.
