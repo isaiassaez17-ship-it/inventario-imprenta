@@ -34,7 +34,7 @@
 
   <script type="module">
     import { requireLogin, isAdmin } from "./js/auth-guard.js";
-    import { db, collection, onSnapshot, query, where } from "./js/firebase.js";
+    import { db, collection, onSnapshot, deleteDoc, doc, query, where } from "./js/firebase.js";
 
     const pageTitle = document.getElementById("page-title");
     const pageSubtitle = document.getElementById("page-subtitle");
@@ -56,7 +56,7 @@
       return parts.join(", ") || "—";
     }
 
-    function renderRequestsTable(requests) {
+    function renderRequestsTable(requests, canDelete) {
       if (requests.length === 0) {
         requestsTableEl.innerHTML = `<div class="empty-state">No hay solicitudes para mostrar.</div>`;
         return;
@@ -64,7 +64,9 @@
       requestsTableEl.innerHTML = `
         <table>
           <thead>
-            <tr><th>Fecha</th><th>Nombre</th><th>Correo</th><th>Materiales</th><th>Notas</th></tr>
+            <tr><th>Fecha</th><th>Nombre</th><th>Correo</th><th>Materiales</th><th>Notas</th>${
+              canDelete ? "<th></th>" : ""
+            }</tr>
           </thead>
           <tbody>
             ${requests
@@ -76,6 +78,11 @@
                 <td>${r.userEmail}</td>
                 <td>${itemsToText(r)}</td>
                 <td>${r.notes || "—"}</td>
+                ${
+                  canDelete
+                    ? `<td><button class="btn-secondary delete-request-btn" data-id="${r.id}">Eliminar</button></td>`
+                    : ""
+                }
               </tr>
             `
               )
@@ -83,6 +90,37 @@
           </tbody>
         </table>
       `;
+
+      if (canDelete) {
+        requestsTableEl.querySelectorAll(".delete-request-btn").forEach((btn) => {
+          btn.addEventListener("click", async () => {
+            if (!btn.dataset.confirming) {
+              btn.dataset.confirming = "1";
+              btn.textContent = "¿Confirmar?";
+              btn.classList.add("btn-danger-confirm");
+              setTimeout(() => {
+                if (btn.isConnected && btn.dataset.confirming) {
+                  delete btn.dataset.confirming;
+                  btn.textContent = "Eliminar";
+                  btn.classList.remove("btn-danger-confirm");
+                }
+              }, 4000);
+              return;
+            }
+
+            btn.disabled = true;
+            btn.textContent = "Eliminando...";
+            try {
+              await deleteDoc(doc(db, "requests", btn.dataset.id));
+            } catch (err) {
+              console.error(err);
+              btn.disabled = false;
+              btn.textContent = "Error, reintentar";
+              delete btn.dataset.confirming;
+            }
+          });
+        });
+      }
     }
 
     function renderSummary(requests) {
@@ -156,18 +194,22 @@
 
       const q = query(collection(db, "requests"), where("monthKey", "==", monthKey));
       unsubscribe = onSnapshot(q, (snap) => {
-        const requests = snap.docs.map((d) => d.data()).sort((a, b) => b.createdAtMs - a.createdAtMs);
+        const requests = snap.docs
+          .map((d) => ({ id: d.id, ...d.data() }))
+          .sort((a, b) => b.createdAtMs - a.createdAtMs);
         lastLoadedRequests = requests;
         renderSummary(requests);
-        renderRequestsTable(requests);
+        renderRequestsTable(requests, true);
       });
     }
 
     function watchMyView(user) {
       const q = query(collection(db, "requests"), where("uid", "==", user.uid));
       unsubscribe = onSnapshot(q, (snap) => {
-        const requests = snap.docs.map((d) => d.data()).sort((a, b) => b.createdAtMs - a.createdAtMs);
-        renderRequestsTable(requests);
+        const requests = snap.docs
+          .map((d) => ({ id: d.id, ...d.data() }))
+          .sort((a, b) => b.createdAtMs - a.createdAtMs);
+        renderRequestsTable(requests, false);
       });
     }
 
